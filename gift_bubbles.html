@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    font-family: "Segoe UI", Arial, sans-serif;
+}
+
+#screen {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.gift-bubble {
+    position: absolute;
+    width: 218px;
+    min-height: 88px;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    border: 1px solid rgba(255, 213, 115, .85);
+    border-radius: 19px;
+    background: linear-gradient(135deg,
+        rgba(35, 27, 15, .94),
+        rgba(12, 12, 12, .92));
+    box-shadow:
+        0 0 12px rgba(255, 190, 65, .28),
+        inset 0 0 12px rgba(255, 215, 130, .08);
+    animation:
+        floatAround var(--float-time) ease-in-out infinite alternate,
+        appear .5s ease-out forwards;
+    will-change: transform, opacity;
+}
+
+.gift-bubble.leaving {
+    animation: disappear 1.5s ease-in forwards;
+}
+
+.avatar-wrap {
+    position: relative;
+    flex: 0 0 58px;
+    width: 58px;
+    height: 58px;
+}
+
+.avatar-ring {
+    position: absolute;
+    inset: -4px;
+    border: 1.5px solid #e8bd61;
+    border-radius: 50%;
+    box-shadow: 0 0 9px rgba(255, 197, 85, .45);
+}
+
+.avatar {
+    width: 58px;
+    height: 58px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #f5d58c;
+    background: #292016;
+}
+
+.avatar-fallback {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffe2a0;
+    font-size: 23px;
+    font-weight: 800;
+    border-radius: 50%;
+    background: #49351b;
+}
+
+.gift-icon-wrap {
+    position: absolute;
+    width: 31px;
+    height: 31px;
+    right: -11px;
+    bottom: -5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 1.5px solid #ffe3a0;
+    background: #17120b;
+    box-shadow: 0 0 10px rgba(255, 196, 77, .55);
+    animation: giftPulse 1.8s ease-in-out infinite;
+}
+
+.gift-icon {
+    width: 23px;
+    height: 23px;
+    object-fit: contain;
+}
+
+.gift-fallback {
+    font-size: 17px;
+}
+
+.details {
+    min-width: 0;
+    flex: 1;
+}
+
+.username {
+    color: #ffe5aa;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+    text-shadow: 0 1px 4px #000;
+}
+
+.gift-line {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 5px;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.gift-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.gift-count {
+    flex-shrink: 0;
+    color: #ffd16f;
+    font-size: 13px;
+    font-weight: 900;
+}
+
+@keyframes floatAround {
+    from {
+        transform: translate(0, 0) rotate(-1deg);
+    }
+    to {
+        transform: translate(var(--move-x), var(--move-y)) rotate(1deg);
+    }
+}
+
+@keyframes appear {
+    from {
+        opacity: 0;
+        scale: .75;
+    }
+    to {
+        opacity: 1;
+        scale: 1;
+    }
+}
+
+@keyframes disappear {
+    to {
+        opacity: 0;
+        transform: translateY(-25px) scale(.8);
+    }
+}
+
+@keyframes giftPulse {
+    0%, 100% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.13);
+    }
+}
+</style>
+</head>
+
+<body>
+<div id="screen"></div>
+
+<script>
+"use strict";
+
+const WS_URL = "ws://127.0.0.1:8766";
+const DISPLAY_TIME = 120000;
+const MAX_BUBBLES = 30;
+
+const screen = document.getElementById("screen");
+
+let socket = null;
+let reconnectTimer = null;
+let bubbleCounter = 0;
+
+const activeBubbles = new Map();
+
+function connectSocket() {
+    if (socket &&
+        (socket.readyState === WebSocket.OPEN ||
+         socket.readyState === WebSocket.CONNECTING)) {
+        return;
+    }
+
+    console.log("[GIFT BUBBLE] Menghubungkan ke bridge...");
+
+    socket = new WebSocket(WS_URL);
+
+    socket.onopen = function() {
+        console.log("[GIFT BUBBLE] Terhubung ke bridge.");
+        clearTimeout(reconnectTimer);
+    };
+
+    socket.onmessage = function(message) {
+        try {
+            const payload = JSON.parse(message.data);
+
+            const activity =
+                payload.event === "indofinity_raw"
+                    ? payload.data
+                    : payload;
+
+            if (!activity || typeof activity !== "object") return;
+
+            const eventName = String(
+                activity.event || activity.type || ""
+            ).toLowerCase();
+
+            if (eventName !== "gift") return;
+
+            const giftData = activity.data || {};
+
+            createGiftBubble(giftData);
+
+        } catch (error) {
+            console.error("[GIFT BUBBLE] Pesan gagal dibaca:", error);
+        }
+    };
+
+    socket.onerror = function(error) {
+        console.warn("[GIFT BUBBLE] Koneksi mengalami gangguan.");
+    };
+
+    socket.onclose = function() {
+        console.warn("[GIFT BUBBLE] Koneksi terputus. Mencoba kembali...");
+        reconnectTimer = setTimeout(connectSocket, 3000);
+    };
+}
+
+function getPosition() {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+
+    const bubbleWidth = Math.min(218, width - 16);
+    const bubbleHeight = 100;
+
+    const columns = Math.max(1, Math.floor(width / 235));
+    const rows = Math.max(1, Math.floor(height / 145));
+
+    const totalSlots = columns * rows;
+    const slot = bubbleCounter % totalSlots;
+
+    const column = slot % columns;
+    const row = Math.floor(slot / columns);
+
+    const cellWidth = width / columns;
+    const cellHeight = height / rows;
+
+    const maxLeft = Math.max(8, cellWidth - bubbleWidth);
+    const maxTop = Math.max(8, cellHeight - bubbleHeight);
+
+    const left = column * cellWidth +
+        Math.random() * maxLeft;
+
+    const top = row * cellHeight +
+        Math.random() * maxTop;
+
+    return {
+        left: Math.max(8, Math.min(left, width - bubbleWidth - 8)),
+        top: Math.max(8, Math.min(top, height - bubbleHeight - 8))
+    };
+}
+
+function createGiftBubble(gift) {
+    if (activeBubbles.size >= MAX_BUBBLES) {
+        const oldestId = activeBubbles.keys().next().value;
+        removeBubble(oldestId, true);
+    }
+
+    const id = ++bubbleCounter;
+
+    const username =
+        gift.nickname ||
+        gift.uniqueId ||
+        "TikTok User";
+
+    const giftName =
+        gift.giftName ||
+        gift.describe ||
+        "Gift";
+
+    const repeatCount = Math.max(
+        1,
+        Number(gift.repeatCount || gift.gift?.repeat_count || 1)
+    );
+
+    const avatarUrl =
+        gift.profilePictureUrl ||
+        gift.userDetails?.profilePictureUrls?.[0] ||
+        "";
+
+    const giftImageUrl =
+        gift.giftPictureUrl ||
+        "";
+
+    const position = getPosition();
+
+    const bubble = document.createElement("div");
+    bubble.className = "gift-bubble";
+
+    bubble.style.left = position.left + "px";
+    bubble.style.top = position.top + "px";
+
+    bubble.style.setProperty(
+        "--move-x",
+        (Math.random() * 46 - 23) + "px"
+    );
+
+    bubble.style.setProperty(
+        "--move-y",
+        (Math.random() * 46 - 23) + "px"
+    );
+
+    bubble.style.setProperty(
+        "--float-time",
+        (5 + Math.random() * 5) + "s"
+    );
+
+    const avatarWrap = document.createElement("div");
+    avatarWrap.className = "avatar-wrap";
+
+    const fallback = document.createElement("div");
+    fallback.className = "avatar-fallback";
+    fallback.textContent = String(username).charAt(0).toUpperCase();
+
+    const avatar = document.createElement("img");
+    avatar.className = "avatar";
+    avatar.alt = "Foto profil";
+
+    if (avatarUrl) {
+        avatar.src = avatarUrl;
+        avatar.onerror = function() {
+            avatar.style.display = "none";
+        };
+    } else {
+        avatar.style.display = "none";
+    }
+
+    const ring = document.createElement("div");
+    ring.className = "avatar-ring";
+
+    const giftWrap = document.createElement("div");
+    giftWrap.className = "gift-icon-wrap";
+
+    const giftFallback = document.createElement("span");
+    giftFallback.className = "gift-fallback";
+    giftFallback.textContent = "🎁";
+
+    const giftIcon = document.createElement("img");
+    giftIcon.className = "gift-icon";
+    giftIcon.alt = "Gift";
+
+    if (giftImageUrl) {
+        giftIcon.src = giftImageUrl;
+        giftIcon.onerror = function() {
+            giftIcon.style.display = "none";
+        };
+    } else {
+        giftIcon.style.display = "none";
+    }
+
+    giftWrap.appendChild(giftFallback);
+    giftWrap.appendChild(giftIcon);
+
+    avatarWrap.appendChild(fallback);
+    avatarWrap.appendChild(avatar);
+    avatarWrap.appendChild(ring);
+    avatarWrap.appendChild(giftWrap);
+
+    const details = document.createElement("div");
+    details.className = "details";
+
+    const nameElement = document.createElement("div");
+    nameElement.className = "username";
+    nameElement.textContent = username;
+
+    const giftLine = document.createElement("div");
+    giftLine.className = "gift-line";
+
+    const giftNameElement = document.createElement("span");
+    giftNameElement.className = "gift-name";
+    giftNameElement.textContent = giftName;
+
+    const countElement = document.createElement("span");
+    countElement.className = "gift-count";
+    countElement.textContent = "× " + repeatCount;
+
+    giftLine.appendChild(giftNameElement);
+    giftLine.appendChild(countElement);
+
+    details.appendChild(nameElement);
+    details.appendChild(giftLine);
+
+    bubble.appendChild(avatarWrap);
+    bubble.appendChild(details);
+
+    screen.appendChild(bubble);
+
+    activeBubbles.set(id, bubble);
+
+    setTimeout(function() {
+        removeBubble(id, false);
+    }, DISPLAY_TIME);
+
+    console.log(
+        "[GIFT BUBBLE] " +
+        username + " mengirim " +
+        giftName + " × " + repeatCount
+    );
+}
+
+function removeBubble(id, immediate) {
+    const bubble = activeBubbles.get(id);
+
+    if (!bubble) return;
+
+    if (immediate) {
+        bubble.remove();
+        activeBubbles.delete(id);
+        return;
+    }
+
+    bubble.classList.add("leaving");
+
+    setTimeout(function() {
+        bubble.remove();
+        activeBubbles.delete(id);
+    }, 1500);
+}
+
+connectSocket();
+</script>
+</body>
+</html>
